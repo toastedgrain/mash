@@ -1,4 +1,24 @@
-# Byte-compiled / optimized / DLL files
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+           # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -217,3 +237,5 @@ __marimo__/
 
 # GCP Vertex AI service account credentials
 service_account.json
+# API
+favorable-beach-488220-h1-2c81ef7a793e.json

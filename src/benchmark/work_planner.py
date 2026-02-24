@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -109,6 +110,34 @@ def load_and_validate_entries(input_file: Path) -> list[InputEntry]:
         raise ValueError("No valid entries found")
 
     return input_entries
+
+
+def samples_to_input_entries(
+    samples: Iterable[Any], dataset: str
+) -> list[InputEntry]:
+    """Convert dataset Samples to InputEntry dicts for the benchmark pipeline.
+
+    For PersistBench samples: preserves existing failure_type from metadata.
+    For CIM samples: sets failure_type to 'cim' and stores attribute lists.
+    """
+    from benchmark.datasets import Sample
+
+    entries: list[InputEntry] = []
+    for i, sample in enumerate(samples):
+        assert isinstance(sample, Sample)
+        entry: InputEntry = {
+            "memories": sample.memories,
+            "query": sample.prompt,
+            "hash_id": sample.sample_id,
+            "original_index": i,
+            "failure_type": sample.metadata.get("failure_type", dataset),
+        }
+        if dataset == "cim":
+            entry["required_attributes"] = sample.required_attributes
+            entry["forbidden_attributes"] = sample.forbidden_attributes
+            entry["cim_metadata"] = sample.metadata
+        entries.append(entry)
+    return entries
 
 
 def ensure_entry_configuration(entry: dict[str, Any]) -> str:

@@ -36,6 +36,7 @@ from benchmark.execution.judgment import (
     SequentialJudgmentExecutor,
     build_judgment_tasks,
     get_judge_provider,
+    set_judge_model,
     set_judge_provider,
 )
 from benchmark.work_planner import (
@@ -45,6 +46,7 @@ from benchmark.work_planner import (
     load_and_validate_entries,
     prepare_work_plan,
     reconstruct_config,
+    samples_to_input_entries,
 )
 
 Checkpoint: TypeAlias = dict[str, Any]
@@ -188,9 +190,25 @@ def _prepare_benchmark_execution(
     return work_plan.checkpoint, work_plan.pending_work
 
 
+def _load_cim_entries(config: BenchmarkConfig) -> list[InputEntry]:
+    """Load entries from CIM dataset."""
+    from benchmark.datasets.cim import CIMDataset
+
+    dataset_id = config.cim_path or "facebook/CIMemories"
+    cim_dataset = CIMDataset(
+        dataset_id=dataset_id,
+        memory_mode=config.memory_mode,
+    )
+    samples = list(cim_dataset)
+    print(f"Loaded {len(samples)} samples from CIM dataset ({dataset_id})")
+    return samples_to_input_entries(samples, dataset="cim")
+
+
 def _load_from_file(
     file_path: Path,
     limit: int | None = None,
+    dataset_override: str | None = None,
+    config: BenchmarkConfig | None = None,
 ) -> tuple[list[InputEntry], BenchmarkConfig, bool, dict[str, Any] | None]:
     """Load entries and config from either a config file or a checkpoint file.
 
@@ -210,8 +228,16 @@ def _load_from_file(
         is_fresh_config = False
         print(f"Resuming from checkpoint: {file_path} ({len(entries)} entries)")
     else:
-        config = load_benchmark_config_data(data, config_path=file_path)
-        entries = load_and_validate_entries(config.input)
+        if config is None:
+            config = load_benchmark_config_data(data, config_path=file_path)
+
+        # Determine effective dataset
+        effective_dataset = dataset_override or config.dataset
+
+        if effective_dataset == "cim":
+            entries = _load_cim_entries(config)
+        else:
+            entries = load_and_validate_entries(config.input)
         is_fresh_config = True
         # Config-level limit applies only when loading fresh from config
         if limit is None:
@@ -235,6 +261,12 @@ async def run_benchmark(
     concurrency_override: int | None = None,
     judge_provider: str | None = None,
     store_raw_api_responses: bool | None = None,
+    dataset: str | None = None,
+    memory_mode: str | None = None,
+    cim_path: str | None = None,
+    generator_model: str | None = None,
+    judge_model: str | None = None,
+    provider: str | None = None,
 ) -> BenchmarkStats:
     """Run benchmark workflow from a config file or checkpoint file.
 
@@ -245,18 +277,52 @@ async def run_benchmark(
         skip_generation: Skip generation phase (judge-only mode).
         skip_judge: Skip judgment phase (generation-only mode).
         judge_provider: Override judge provider (CLI > config > env > default).
+        dataset: Override dataset type ('persistbench' or 'cim').
+        memory_mode: Override CIM memory mode.
+        cim_path: Override CIM dataset path/ID.
+        generator_model: Override generator model name.
+        judge_model: Override judge model name.
+        provider: Override provider for generator/judge.
 
     Returns:
         Benchmark stats for this run/checkpoint.
     """
     path = Path(file_path)
+
+    # Pre-load config to apply CLI overrides before loading entries
+    data, is_checkpoint = _load_json_file(path)
+    pre_config: BenchmarkConfig | None = None
+    if not is_checkpoint:
+        pre_config = load_benchmark_config_data(data, config_path=path)
+        # Apply dataset-related CLI overrides before entry loading
+        if dataset is not None:
+            pre_config.dataset = dataset
+        if memory_mode is not None:
+            pre_config.memory_mode = memory_mode
+        if cim_path is not None:
+            pre_config.cim_path = cim_path
+        if generator_model is not None:
+            pre_config.generator_model = generator_model
+        if provider is not None:
+            pre_config.provider = provider
+
     entries, config, is_fresh_config, existing_checkpoint = _load_from_file(
-        path, limit=limit
+        path, limit=limit, dataset_override=dataset, config=pre_config
     )
 
     # Apply CLI overrides before capturing config_dict
     if store_raw_api_responses is not None:
         config.store_raw_api_responses = store_raw_api_responses
+
+    if generator_model is not None:
+        config.generator_model = generator_model
+    if judge_model is not None:
+        config.judge_model_name = judge_model
+    if provider is not None:
+        config.provider = provider
+
+    # Set judge model override
+    set_judge_model(config.judge_model_name)
 
     # Resolve judge provider: CLI > config > env > default (openrouter)
     set_judge_provider(judge_provider or config.judge_provider)
@@ -388,6 +454,12 @@ async def run_benchmark_with_retry(
     judge_provider: str | None = None,
     concurrency_override: int | None = None,
     store_raw_api_responses: bool | None = None,
+    dataset: str | None = None,
+    memory_mode: str | None = None,
+    cim_path: str | None = None,
+    generator_model: str | None = None,
+    judge_model: str | None = None,
+    provider: str | None = None,
 ) -> BenchmarkStats:
     """Run benchmark with optional run-level retry on failures.
 
@@ -395,26 +467,31 @@ async def run_benchmark_with_retry(
     RUN_RETRY_MAX_ATTEMPTS times if failures occur, reducing concurrency
     by RUN_RETRY_CONCURRENCY_FACTOR each retry.
 
-    Args:
-        file_path: Path to config file or checkpoint file.
-        skip_generation: Skip generation phase (judge-only mode).
-        skip_judge: Skip judgment phase (generation-only mode).
-
     Returns:
         Benchmark stats for this run/checkpoint.
     """
+    common_kwargs: dict[str, Any] = dict(
+        file_path=file_path,
+        dry_run=dry_run,
+        ignore_config_mismatch=ignore_config_mismatch,
+        limit=limit,
+        skip_judge=skip_judge,
+        skip_generation=skip_generation,
+        batch_poll_timeout_minutes=batch_poll_timeout_minutes,
+        judge_provider=judge_provider,
+        store_raw_api_responses=store_raw_api_responses,
+        dataset=dataset,
+        memory_mode=memory_mode,
+        cim_path=cim_path,
+        generator_model=generator_model,
+        judge_model=judge_model,
+        provider=provider,
+    )
+
     if not retry_enabled:
         return await run_benchmark(
-            file_path=file_path,
-            dry_run=dry_run,
-            ignore_config_mismatch=ignore_config_mismatch,
-            limit=limit,
-            skip_judge=skip_judge,
-            skip_generation=skip_generation,
-            batch_poll_timeout_minutes=batch_poll_timeout_minutes,
-            judge_provider=judge_provider,
             concurrency_override=concurrency_override,
-            store_raw_api_responses=store_raw_api_responses,
+            **common_kwargs,
         )
 
     path = Path(file_path)
@@ -434,16 +511,8 @@ async def run_benchmark_with_retry(
     for attempt in range(1 + RUN_RETRY_MAX_ATTEMPTS):
         try:
             last_stats = await run_benchmark(
-                file_path=file_path,
-                dry_run=dry_run,
-                ignore_config_mismatch=ignore_config_mismatch,
-                limit=limit,
-                skip_judge=skip_judge,
-                skip_generation=skip_generation,
-                batch_poll_timeout_minutes=batch_poll_timeout_minutes,
                 concurrency_override=current_concurrency,
-                judge_provider=judge_provider,
-                store_raw_api_responses=store_raw_api_responses,
+                **common_kwargs,
             )
 
             if last_stats.failed == 0:

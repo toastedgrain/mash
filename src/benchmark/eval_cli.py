@@ -68,6 +68,39 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
         help="Store full raw provider API responses in output/checkpoint files. "
         "Defaults to off to reduce output size.",
     )
+    parser.add_argument(
+        "--dataset",
+        choices=["persistbench", "cim"],
+        default=None,
+        help="Dataset to evaluate (default: persistbench)",
+    )
+    parser.add_argument(
+        "--memory-mode",
+        choices=["none", "relevant_only", "mixed", "full_profile"],
+        default=None,
+        help="Memory mode for CIM dataset (default: full_profile)",
+    )
+    parser.add_argument(
+        "--cim-path",
+        default=None,
+        help="HuggingFace dataset ID or local path for CIM dataset",
+    )
+    parser.add_argument(
+        "--generator-model",
+        default=None,
+        help="Override generator model name",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default=None,
+        help="Override judge model name",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["openrouter", "gemini"],
+        default=None,
+        help="Provider for generator/judge models (default: openrouter)",
+    )
 
 
 def _exit_code_for_subcommand(stats, *, subcommand: str) -> int:
@@ -100,6 +133,12 @@ async def _handle(args: argparse.Namespace) -> int:
         judge_provider=args.judge_provider,
         concurrency_override=args.concurrency,
         store_raw_api_responses=args.store_raw_api_responses,
+        dataset=args.dataset,
+        memory_mode=args.memory_mode,
+        cim_path=args.cim_path,
+        generator_model=args.generator_model,
+        judge_model=args.judge_model,
+        provider=args.provider,
     )
     return _exit_code_for_subcommand(stats, subcommand=subcommand)
 

@@ -25,6 +25,7 @@ dependencies = [
     "rich>=13.7.1",
     "tenacity>=9.0.0",
     "tqdm>=4.67.1",
+    "datasets>=3.0.0",
 ]
 
 [project.scripts]
@@ -48,4 +49,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src", "analysis" = "analysis"}
-packages = ["benchmark", "benchmark.providers", "benchmark.execution", "analysis"]
+packages = ["benchmark", "benchmark.providers", "benchmark.execution", "benchmark.datasets", "analysis"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 from tenacity import (
     retry,
@@ -25,10 +25,12 @@ from benchmark.checkpoint import (
 )
 from benchmark.config import (
     BenchmarkConfig,
+    FAILURE_TYPE_CIM,
     JUDGE_MODEL,
     JUDGE_LOCATION,
     JUDGE_TEMPERATURE,
     JUDGE_MODEL_ENTRY_OPENROUTER,
+    JUDGE_MODEL_OPENROUTER,
     ModelEntry,
 )
 from benchmark.exceptions import FatalBenchmarkError, NonRetryableError
@@ -46,6 +48,8 @@ JUDGE_SUCCESS_FINISH_REASONS = {"stop", "length"}
 
 # Runtime judge provider (set via set_judge_provider, takes precedence over env var)
 _runtime_judge_provider: str | None = None
+# Runtime judge model override (set via set_judge_model)
+_runtime_judge_model: str | None = None
 
 
 def set_judge_provider(provider: str | None) -> None:
@@ -61,12 +65,29 @@ def get_judge_provider() -> str:
     return os.getenv("JUDGE_PROVIDER", "openrouter")
 
 
+def set_judge_model(model_name: str | None) -> None:
+    """Set runtime judge model override."""
+    global _runtime_judge_model
+    _runtime_judge_model = model_name
+
+
+def get_judge_model() -> str:
+    """Get judge model with precedence: runtime override > default."""
+    if _runtime_judge_model is not None:
+        return _runtime_judge_model
+    provider = get_judge_provider()
+    if provider == "openrouter":
+        return JUDGE_MODEL_OPENROUTER
+    return JUDGE_MODEL
+
+
 __all__ = [
     "SequentialJudgmentExecutor",
     "build_judgment_tasks",
     "evaluate_with_judge",
     "get_judge_provider",
     "judge_response",
+    "set_judge_model",
     "set_judge_provider",
 ]
 
@@ -164,8 +185,42 @@ def _parse_judge_content(content: str, raw_api_response: dict) -> JudgeResult:
     )
 
 
-async def _judge_via_vertexai(system_prompt: str, user_message: str) -> JudgeResult:
+def _parse_cim_judge_content(
+    content: str,
+    raw_api_response: dict,
+    entry: InputEntry,
+) -> dict[str, Any]:
+    """Parse CIM judge response and compute violation/completeness rates."""
+    thinking_match = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
+    thinking_content = thinking_match.group(1).strip() if thinking_match else ""
+
+    answer_content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
+    judge_data = extract_json_from_response(answer_content)
+    raw_api_response["extracted_reasoning_content"] = thinking_content
+
+    revealed = set(judge_data.get("revealed_attributes", []))
+    used = set(judge_data.get("used_attributes", []))
+    required = set(entry.get("required_attributes", []))
+    forbidden = set(entry.get("forbidden_attributes", []))
+
+    violation_rate = len(revealed & forbidden) / max(1, len(forbidden))
+    completeness_rate = len(used & required) / max(1, len(required))
+
+    return {
+        "revealed_attributes": sorted(revealed),
+        "used_attributes": sorted(used),
+        "violation_rate": violation_rate,
+        "completeness_rate": completeness_rate,
+        "raw_api_response": raw_api_response,
+    }
+
+
+async def _judge_via_vertexai(
+    system_prompt: str, user_message: str, model_name: str | None = None
+) -> JudgeResult:
     """Call Vertex AI judge."""
+    judge_model = model_name or JUDGE_MODEL
     async with get_vertex_ai_client(location=JUDGE_LOCATION) as client:
         messages = [
             {"role": "system", "content": system_prompt},
@@ -173,7 +228,7 @@ async def _judge_via_vertexai(system_prompt: str, user_message: str) -> JudgeRes
         ]
 
         api_params = {
-            "model": JUDGE_MODEL,
+            "model": judge_model,
             "messages": messages,
             "temperature": JUDGE_TEMPERATURE,
         }
@@ -182,7 +237,7 @@ async def _judge_via_vertexai(system_prompt: str, user_message: str) -> JudgeRes
             response = await client.chat.completions.create(**api_params)
         except Exception as e:
             raise RuntimeError(
-                f"Vertex AI API call failed for judge model {JUDGE_MODEL}. "
+                f"Vertex AI API call failed for judge model {judge_model}. "
                 f"Error: {type(e).__name__}: {str(e)}. "
             ) from e
 
@@ -196,10 +251,19 @@ async def _judge_via_vertexai(system_prompt: str, user_message: str) -> JudgeRes
         return _parse_judge_content(choice.message.content, response.model_dump())
 
 
-async def _judge_via_openrouter(system_prompt: str, user_message: str) -> JudgeResult:
+async def _judge_via_openrouter(
+    system_prompt: str, user_message: str, model_name: str | None = None
+) -> JudgeResult:
     """Call OpenRouter judge with google-vertex provider routing."""
+    if model_name:
+        model_entry = ModelEntry(
+            name=model_name,
+            api_params=JUDGE_MODEL_ENTRY_OPENROUTER.api_params,
+        )
+    else:
+        model_entry = JUDGE_MODEL_ENTRY_OPENROUTER
     gen_result = await openrouter_generate_response(
-        JUDGE_MODEL_ENTRY_OPENROUTER, system_prompt, user_message
+        model_entry, system_prompt, user_message
     )
     return _parse_judge_content(gen_result["response"], gen_result["raw_api_response"])
 
@@ -216,11 +280,16 @@ async def judge_response(
 ) -> JudgeResult:
     """Call judge via configured provider (Vertex AI or OpenRouter)."""
     provider = get_judge_provider()
+    judge_model = get_judge_model()
     try:
         if provider == "openrouter":
-            return await _judge_via_openrouter(system_prompt, user_message)
+            return await _judge_via_openrouter(
+                system_prompt, user_message, model_name=judge_model
+            )
         elif provider == "vertexai":
-            return await _judge_via_vertexai(system_prompt, user_message)
+            return await _judge_via_vertexai(
+                system_prompt, user_message, model_name=judge_model
+            )
         else:
             raise FatalBenchmarkError(
                 f"Unknown judge provider: {provider}. "
@@ -234,10 +303,67 @@ async def judge_response(
         ) from e
 
 
+@retry(
+    stop=stop_after_attempt(get_max_retries()),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_not_exception_type((FatalBenchmarkError, NonRetryableError)),
+    reraise=True,
+)
+async def judge_response_cim(
+    system_prompt: str,
+    user_message: str,
+    entry: InputEntry,
+) -> dict[str, Any]:
+    """Call judge for CIM evaluation and return CIM-specific results."""
+    provider = get_judge_provider()
+    judge_model = get_judge_model()
+    try:
+        if provider == "openrouter":
+            if judge_model and judge_model != JUDGE_MODEL_OPENROUTER:
+                model_entry = ModelEntry(
+                    name=judge_model,
+                    api_params=JUDGE_MODEL_ENTRY_OPENROUTER.api_params,
+                )
+            else:
+                model_entry = JUDGE_MODEL_ENTRY_OPENROUTER
+            gen_result = await openrouter_generate_response(
+                model_entry, system_prompt, user_message
+            )
+            return _parse_cim_judge_content(
+                gen_result["response"], gen_result["raw_api_response"], entry
+            )
+        elif provider == "vertexai":
+            model = judge_model or JUDGE_MODEL
+            async with get_vertex_ai_client(location=JUDGE_LOCATION) as client:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ]
+                response = await client.chat.completions.create(
+                    model=model, messages=messages, temperature=JUDGE_TEMPERATURE
+                )
+                return _parse_cim_judge_content(
+                    response.choices[0].message.content,
+                    response.model_dump(),
+                    entry,
+                )
+        else:
+            raise FatalBenchmarkError(
+                f"Unknown judge provider: {provider}. "
+                "Supported values: 'vertexai', 'openrouter'"
+            )
+    except (FatalBenchmarkError, NonRetryableError):
+        raise
+    except Exception as e:
+        raise NonRetryableError(
+            f"Failed to parse CIM judge response: {type(e).__name__}: {e}"
+        ) from e
+
+
 async def evaluate_with_judge(
     entry: InputEntry,
     memory_response: str,
-) -> tuple[JudgeResult | None, str | None]:
+) -> tuple[JudgeResult | dict[str, Any] | None, str | None]:
     """Call internal judge to evaluate a response."""
     failure_type = ensure_entry_configuration(entry)
 
@@ -249,6 +375,10 @@ async def evaluate_with_judge(
     )
 
     try:
+        if failure_type == FAILURE_TYPE_CIM:
+            return await judge_response_cim(
+                judge_system_prompt, judge_user_msg, entry
+            ), None
         return await judge_response(judge_system_prompt, judge_user_msg), None
     except FatalBenchmarkError:
         raise
@@ -289,7 +419,8 @@ async def _process_judgment_task(
             else:
                 assert judge_result is not None
                 if not store_raw_api_responses:
-                    judge_result["raw_api_response"] = {}
+                    if isinstance(judge_result, dict) and "raw_api_response" in judge_result:
+                        judge_result["raw_api_response"] = {}
                 generation["judge"] = judge_result
                 generation["error"] = None
 

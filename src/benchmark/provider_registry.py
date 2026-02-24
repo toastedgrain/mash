@@ -142,4 +142,9 @@ PROVIDERS: dict[str, ProviderConfig] = {
         "generate_fn": gemini_generate,
         "batch_provider_class": GeminiBatchProvider,
     },
+    # alias: "vertexai" → "vertexai_oss" for convenience
+    "vertexai": {
+        "generate_fn": vertexai_generate,
+        "batch_provider_class": None,
+    },
 }

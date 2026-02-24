@@ -10,19 +10,19 @@ from pydantic import BaseModel, Field, PositiveInt
 
 FAILURE_TYPE_CROSS_DOMAIN = "cross_domain"
 FAILURE_TYPE_SYCOPHANCY = "sycophancy"
-FAILURE_TYPE_BENEFICIAL_MEMORY = "beneficial_memory_usage"
+FAILURE_TYPE_CIM = "cim"
 
 VALID_FAILURE_TYPES = {
     FAILURE_TYPE_CROSS_DOMAIN,
     FAILURE_TYPE_SYCOPHANCY,
-    FAILURE_TYPE_BENEFICIAL_MEMORY,
+    FAILURE_TYPE_CIM,
 }
 
 # Per-category generation defaults when no global override is set
 DEFAULT_GENERATIONS_BY_FAILURE_TYPE = {
     FAILURE_TYPE_CROSS_DOMAIN: 3,
     FAILURE_TYPE_SYCOPHANCY: 3,
-    FAILURE_TYPE_BENEFICIAL_MEMORY: 1,
+    FAILURE_TYPE_CIM: 1,
 }
 
 
@@ -33,7 +33,7 @@ def get_generations_for_failure_type(
     """Resolve generation count for a failure type.
 
     If generations_override is set, uses that for all types.
-    Otherwise uses per-category defaults (3 for cross_domain/sycophancy, 1 for beneficial).
+    Otherwise uses per-category defaults (3 for cross_domain/sycophancy, 1 for cim).
     """
     if generations_override is not None:
         return generations_override
@@ -41,7 +41,6 @@ def get_generations_for_failure_type(
 
 # Backwards compatibility aliases
 _LEGACY_ALIASES = {
-    "positive_memory_usage": FAILURE_TYPE_BENEFICIAL_MEMORY,
     "leakage_type": "failure_type",
 }
 
@@ -104,6 +103,16 @@ class BenchmarkConfig(BaseModel):
     limit: PositiveInt | None = None
     batch_poll_timeout_minutes: PositiveInt = 25
     prompt_template: Path | None = None
+
+    # Dataset configuration
+    dataset: str = "persistbench"
+    memory_mode: str = "full_profile"
+    cim_path: str | None = None
+
+    # Model overrides
+    generator_model: str | None = None
+    judge_model_name: str | None = None
+    provider: str = "openrouter"
 
     # Loaded template content (not part of JSON schema)
     prompt_template_content: str | None = None

@@ -435,15 +435,19 @@ VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "global")
 DEFAULT_SERVICE_ACCOUNT_PATH = "service_account.json"
 
 
+def _get_service_account_path() -> str:
+    """Get service account path, stripping quotes that CMD/PowerShell may embed."""
+    raw = os.getenv("VERTEXAI_SERVICE_ACCOUNT_PATH", DEFAULT_SERVICE_ACCOUNT_PATH)
+    return raw.strip().strip('"').strip("'")
+
+
 def get_vertex_project_id() -> str:
     """Get Vertex AI project ID from service account or env var."""
     if project_id := os.getenv("VERTEXAI_PROJECT"):
         return project_id
 
     # Extract from service account JSON
-    service_account_path = os.getenv(
-        "VERTEXAI_SERVICE_ACCOUNT_PATH", DEFAULT_SERVICE_ACCOUNT_PATH
-    )
+    service_account_path = _get_service_account_path()
     try:
         with open(service_account_path, "r") as f:
             service_account_data = json.load(f)
@@ -486,9 +490,9 @@ def get_vertex_ai_client(location: str | None = None) -> AsyncOpenAI:
     """
     if not os.getenv("VERTEXAI_SERVICE_ACCOUNT_PATH"):
         raise FatalBenchmarkError(
-            "VERTEXAI_SERVICE_ACCOUNT_PATH is not set, point it to the Vertex AI service account credentials fil path"
+            "VERTEXAI_SERVICE_ACCOUNT_PATH is not set, point it to the Vertex AI service account credentials file path"
         )
-    service_account_path = os.getenv("VERTEXAI_SERVICE_ACCOUNT_PATH")
+    service_account_path = _get_service_account_path()
     credentials = Credentials.from_service_account_file(
         service_account_path,
         scopes=["https://www.googleapis.com/auth/cloud-platform"],
