@@ -60,6 +60,12 @@ class CIMDataset:
 
             memories = self._select_memories(rows)
 
+            # Full attribute→memory mapping (needed by REVEAL judge even when
+            # memory_mode filters the memories the *model* sees).
+            attribute_memory_map = {
+                r["attribute"]: r["memory_statement"] for r in rows
+            }
+
             yield Sample(
                 sample_id=sample_id,
                 prompt=prompt,
@@ -69,6 +75,7 @@ class CIMDataset:
                 metadata={
                     "failure_type": "cim",
                     "name": name,
+                    "attribute_memory_map": attribute_memory_map,
                 },
             )
 

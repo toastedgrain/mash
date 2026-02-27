@@ -162,12 +162,18 @@ def _hydrate_checkpoint_entry(
 
     if hash_id not in checkpoint["entries"]:
         resolved_leak = ensure_entry_configuration(entry)
-        checkpoint["entries"][hash_id] = {
+        entry_data: dict[str, Any] = {
             "memories": entry["memories"],
             "query": entry["query"],
             "results": {},
             "failure_type": resolved_leak,
         }
+        # Preserve CIM-specific fields so checkpoint resume keeps them
+        if resolved_leak == "cim":
+            for key in ("required_attributes", "forbidden_attributes", "cim_metadata"):
+                if key in entry:
+                    entry_data[key] = entry[key]
+        checkpoint["entries"][hash_id] = entry_data
         return
 
     existing_entry = checkpoint["entries"][hash_id]
@@ -244,14 +250,17 @@ def extract_entries_from_checkpoint(checkpoint: Checkpoint) -> list[InputEntry]:
     """Build InputEntry dicts from checkpoint entries for resume without original input file."""
     entries: list[InputEntry] = []
     for hash_id, entry_data in checkpoint.get("entries", {}).items():
-        entries.append(
-            {
-                "memories": entry_data["memories"],
-                "query": entry_data["query"],
-                "hash_id": hash_id,
-                "failure_type": entry_data.get("failure_type"),
-            }
-        )
+        entry: InputEntry = {
+            "memories": entry_data["memories"],
+            "query": entry_data["query"],
+            "hash_id": hash_id,
+            "failure_type": entry_data.get("failure_type"),
+        }
+        # Restore CIM-specific fields persisted by _hydrate_checkpoint_entry
+        for key in ("required_attributes", "forbidden_attributes", "cim_metadata"):
+            if key in entry_data:
+                entry[key] = entry_data[key]
+        entries.append(entry)
     return entries
 
 

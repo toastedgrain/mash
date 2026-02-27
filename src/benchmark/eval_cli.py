@@ -70,9 +70,9 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--dataset",
-        choices=["persistbench", "cim"],
+        choices=["persistbench", "cim", "both"],
         default=None,
-        help="Dataset to evaluate (default: persistbench)",
+        help="Dataset to evaluate: persistbench, cim, or both (default: persistbench)",
     )
     parser.add_argument(
         "--memory-mode",
@@ -84,6 +84,12 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
         "--cim-path",
         default=None,
         help="HuggingFace dataset ID or local path for CIM dataset",
+    )
+    parser.add_argument(
+        "--cim-judge-variant",
+        choices=["default", "reveal_paper_compat"],
+        default=None,
+        help="CIM judge variant: 'default' (legacy) or 'reveal_paper_compat' (REVEAL metric). Default: reveal_paper_compat",
     )
     parser.add_argument(
         "--generator-model",
@@ -136,6 +142,7 @@ async def _handle(args: argparse.Namespace) -> int:
         dataset=args.dataset,
         memory_mode=args.memory_mode,
         cim_path=args.cim_path,
+        cim_judge_variant=args.cim_judge_variant,
         generator_model=args.generator_model,
         judge_model=args.judge_model,
         provider=args.provider,

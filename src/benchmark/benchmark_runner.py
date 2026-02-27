@@ -36,6 +36,7 @@ from benchmark.execution.judgment import (
     SequentialJudgmentExecutor,
     build_judgment_tasks,
     get_judge_provider,
+    set_cim_judge_variant,
     set_judge_model,
     set_judge_provider,
 )
@@ -234,7 +235,15 @@ def _load_from_file(
         # Determine effective dataset
         effective_dataset = dataset_override or config.dataset
 
-        if effective_dataset == "cim":
+        if effective_dataset == "both":
+            pb_entries = load_and_validate_entries(config.input)
+            cim_entries = _load_cim_entries(config)
+            entries = pb_entries + cim_entries
+            print(
+                f"Combined dataset: {len(pb_entries)} PersistBench + "
+                f"{len(cim_entries)} CIM = {len(entries)} total entries"
+            )
+        elif effective_dataset == "cim":
             entries = _load_cim_entries(config)
         else:
             entries = load_and_validate_entries(config.input)
@@ -264,6 +273,7 @@ async def run_benchmark(
     dataset: str | None = None,
     memory_mode: str | None = None,
     cim_path: str | None = None,
+    cim_judge_variant: str | None = None,
     generator_model: str | None = None,
     judge_model: str | None = None,
     provider: str | None = None,
@@ -277,9 +287,10 @@ async def run_benchmark(
         skip_generation: Skip generation phase (judge-only mode).
         skip_judge: Skip judgment phase (generation-only mode).
         judge_provider: Override judge provider (CLI > config > env > default).
-        dataset: Override dataset type ('persistbench' or 'cim').
+        dataset: Override dataset type ('persistbench', 'cim', or 'both').
         memory_mode: Override CIM memory mode.
         cim_path: Override CIM dataset path/ID.
+        cim_judge_variant: CIM judge variant ('default' or 'reveal_paper_compat').
         generator_model: Override generator model name.
         judge_model: Override judge model name.
         provider: Override provider for generator/judge.
@@ -301,6 +312,8 @@ async def run_benchmark(
             pre_config.memory_mode = memory_mode
         if cim_path is not None:
             pre_config.cim_path = cim_path
+        if cim_judge_variant is not None:
+            pre_config.cim_judge_variant = cim_judge_variant
         if generator_model is not None:
             pre_config.generator_model = generator_model
         if provider is not None:
@@ -323,6 +336,9 @@ async def run_benchmark(
 
     # Set judge model override
     set_judge_model(config.judge_model_name)
+
+    # Set CIM judge variant
+    set_cim_judge_variant(config.cim_judge_variant)
 
     # Resolve judge provider: CLI > config > env > default (openrouter)
     set_judge_provider(judge_provider or config.judge_provider)
@@ -457,6 +473,7 @@ async def run_benchmark_with_retry(
     dataset: str | None = None,
     memory_mode: str | None = None,
     cim_path: str | None = None,
+    cim_judge_variant: str | None = None,
     generator_model: str | None = None,
     judge_model: str | None = None,
     provider: str | None = None,
@@ -483,6 +500,7 @@ async def run_benchmark_with_retry(
         dataset=dataset,
         memory_mode=memory_mode,
         cim_path=cim_path,
+        cim_judge_variant=cim_judge_variant,
         generator_model=generator_model,
         judge_model=judge_model,
         provider=provider,

@@ -10,11 +10,13 @@ from pydantic import BaseModel, Field, PositiveInt
 
 FAILURE_TYPE_CROSS_DOMAIN = "cross_domain"
 FAILURE_TYPE_SYCOPHANCY = "sycophancy"
+FAILURE_TYPE_BENEFICIAL = "beneficial_memory_usage"
 FAILURE_TYPE_CIM = "cim"
 
 VALID_FAILURE_TYPES = {
     FAILURE_TYPE_CROSS_DOMAIN,
     FAILURE_TYPE_SYCOPHANCY,
+    FAILURE_TYPE_BENEFICIAL,
     FAILURE_TYPE_CIM,
 }
 
@@ -22,6 +24,7 @@ VALID_FAILURE_TYPES = {
 DEFAULT_GENERATIONS_BY_FAILURE_TYPE = {
     FAILURE_TYPE_CROSS_DOMAIN: 3,
     FAILURE_TYPE_SYCOPHANCY: 3,
+    FAILURE_TYPE_BENEFICIAL: 1,
     FAILURE_TYPE_CIM: 1,
 }
 
@@ -108,6 +111,7 @@ class BenchmarkConfig(BaseModel):
     dataset: str = "persistbench"
     memory_mode: str = "full_profile"
     cim_path: str | None = None
+    cim_judge_variant: str = "reveal_paper_compat"
 
     # Model overrides
     generator_model: str | None = None
